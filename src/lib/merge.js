@@ -1,11 +1,25 @@
 import {
-  PDFArray, PDFDict, PDFDocument, PDFName, PDFNumber,
-  appendBezierCurve, closePath, degrees, fill, lineTo, moveTo, popGraphicsState, pushGraphicsState, setFillingGrayscaleColor,
+  PDFArray,
+  PDFDict,
+  PDFDocument,
+  PDFName,
+  PDFNumber,
+  appendBezierCurve,
+  closePath,
+  degrees,
+  fill,
+  lineTo,
+  moveTo,
+  popGraphicsState,
+  pushGraphicsState,
+  setFillingGrayscaleColor,
 } from "pdf-lib";
+
 import { GLYPHS, UPM } from "./glyphs.js";
 
 /** A4 portrait in PDF points (210 x 297 mm). */
 export const A4 = { width: 595.28, height: 841.89 };
+
 const EPS = 0.01;
 
 export function safeName(value) {
@@ -21,33 +35,56 @@ export function safeName(value) {
 
 /** Returns page count, or throws if the bytes are not a readable PDF. */
 export async function inspectPdf(bytes) {
-  const pdf = await PDFDocument.load(bytes, { ignoreEncryption: true });
+  const pdf = await PDFDocument.load(bytes, {
+    ignoreEncryption: true,
+  });
+
   return pdf.getPageCount();
 }
 
 // ---------------------------------------------------------------------------
-// A4 normalisation (in place - keeps vector content AND annotations such as signature stamps)
+// A4 NORMALIZATION
+// Keeps vector content and annotations such as signature stamps.
 // ---------------------------------------------------------------------------
 
 function pageBox(page) {
   const crop = page.getCropBox();
-  const box = crop.width > 0 && crop.height > 0 ? crop : page.getMediaBox();
-  const rotation = ((page.getRotation().angle % 360) + 360) % 360;
+  const box =
+    crop.width > 0 && crop.height > 0
+      ? crop
+      : page.getMediaBox();
+
+  const rotation =
+    ((page.getRotation().angle % 360) + 360) % 360;
+
   return { box, rotation };
 }
 
 const sameBox = (a, b) =>
-  Math.abs(a.x - b.x) < EPS && Math.abs(a.y - b.y) < EPS && Math.abs(a.width - b.width) < EPS && Math.abs(a.height - b.height) < EPS;
+  Math.abs(a.x - b.x) < EPS &&
+  Math.abs(a.y - b.y) < EPS &&
+  Math.abs(a.width - b.width) < EPS &&
+  Math.abs(a.height - b.height) < EPS;
 
 const USER_UNIT = PDFName.of("UserUnit");
+
 function userUnit(page) {
   const value = page.node.lookupMaybe(USER_UNIT, PDFNumber);
   return value ? value.asNumber() : 1;
 }
 
-/** True when the page is already exactly A4 portrait, origin (0,0), unrotated, normal user units. */
+/**
+ * True when the page is already exactly A4 portrait,
+ * origin (0,0), unrotated, with normal user units.
+ */
 export function isCleanA4(page) {
-  const a4 = { x: 0, y: 0, width: A4.width, height: A4.height };
+  const a4 = {
+    x: 0,
+    y: 0,
+    width: A4.width,
+    height: A4.height,
+  };
+
   return (
     page.getRotation().angle % 360 === 0 &&
     Math.abs(userUnit(page) - 1) < 1e-9 &&
@@ -58,17 +95,32 @@ export function isCleanA4(page) {
 
 const fmt = (n) => String(Number(n.toFixed(6)));
 
-/** Affine matrix [a b c d e f] mapping the page's visible box (incl. /Rotate) onto A4, scaled to fit and centred. */
+/**
+ * Affine matrix [a b c d e f] mapping the visible page box,
+ * including rotation, onto A4 while preserving aspect ratio.
+ */
 function a4Matrix(box, rotation) {
-  const { x: bx, y: by, width: w, height: h } = box;
+  const {
+    x: bx,
+    y: by,
+    width: w,
+    height: h,
+  } = box;
+
   const sideways = rotation === 90 || rotation === 270;
+
   const visibleW = sideways ? h : w;
   const visibleH = sideways ? w : h;
-  const s = Math.min(A4.width / visibleW, A4.height / visibleH);
+
+  const s = Math.min(
+    A4.width / visibleW,
+    A4.height / visibleH
+  );
+
   const ox = (A4.width - visibleW * s) / 2;
   const oy = (A4.height - visibleH * s) / 2;
 
-  // PDF /Rotate is clockwise; these bake it into the content so the page ends up unrotated.
+  // PDF /Rotate is clockwise.
   const base =
     {
       0: [1, 0, 0, 1, -bx, -by],
@@ -77,32 +129,65 @@ function a4Matrix(box, rotation) {
       270: [0, 1, -1, 0, h + by, -bx],
     }[rotation] ?? [1, 0, 0, 1, -bx, -by];
 
-  return [base[0] * s, base[1] * s, base[2] * s, base[3] * s, base[4] * s + ox, base[5] * s + oy];
+  return [
+    base[0] * s,
+    base[1] * s,
+    base[2] * s,
+    base[3] * s,
+    base[4] * s + ox,
+    base[5] * s + oy,
+  ];
 }
 
 function moveAnnotations(doc, page, m) {
   const annots = page.node.Annots();
+
   if (!annots) return;
+
   for (let i = 0; i < annots.size(); i++) {
     try {
       const annot = annots.lookupMaybe(i, PDFDict);
-      const rect = annot?.lookupMaybe(PDFName.of("Rect"), PDFArray);
+
+      const rect = annot?.lookupMaybe(
+        PDFName.of("Rect"),
+        PDFArray
+      );
+
       if (!rect || rect.size() < 4) continue;
-      const [x1, y1, x2, y2] = [0, 1, 2, 3].map((k) => rect.lookup(k, PDFNumber).asNumber());
-      const corners = [[x1, y1], [x2, y2], [x1, y2], [x2, y1]].map(([x, y]) => [
+
+      const [x1, y1, x2, y2] = [0, 1, 2, 3].map(
+        (k) => rect.lookup(k, PDFNumber).asNumber()
+      );
+
+      const corners = [
+        [x1, y1],
+        [x2, y2],
+        [x1, y2],
+        [x2, y1],
+      ].map(([x, y]) => [
         m[0] * x + m[2] * y + m[4],
         m[1] * x + m[3] * y + m[5],
       ]);
+
       const xs = corners.map((c) => c[0]);
       const ys = corners.map((c) => c[1]);
-      annot.set(PDFName.of("Rect"), doc.context.obj([Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)]));
+
+      annot.set(
+        PDFName.of("Rect"),
+        doc.context.obj([
+          Math.min(...xs),
+          Math.min(...ys),
+          Math.max(...xs),
+          Math.max(...ys),
+        ])
+      );
     } catch {
-      /* leave a malformed annotation as it is */
+      // Leave a malformed annotation unchanged.
     }
   }
 }
 
-/** Fits one page onto an exact A4 portrait page. Returns true if the page was modified. */
+/** Fits one page onto an exact A4 portrait page. */
 function fitPageToA4(doc, page) {
   if (isCleanA4(page)) return false;
 
@@ -111,187 +196,330 @@ function fitPageToA4(doc, page) {
 
   if (page.node.Contents()) {
     const context = doc.context;
-    const start = context.register(context.stream(`q ${m.map(fmt).join(" ")} cm\n`));
-    const end = context.register(context.stream("\nQ"));
+
+    const start = context.register(
+      context.stream(`q ${m.map(fmt).join(" ")} cm\n`)
+    );
+
+    const end = context.register(
+      context.stream("\nQ")
+    );
+
     page.node.wrapContentStreams(start, end);
   }
+
   moveAnnotations(doc, page, m);
 
   page.setMediaBox(0, 0, A4.width, A4.height);
   page.setCropBox(0, 0, A4.width, A4.height);
-  ["TrimBox", "BleedBox", "ArtBox", "UserUnit"].forEach((key) => page.node.delete(PDFName.of(key)));
+
+  [
+    "TrimBox",
+    "BleedBox",
+    "ArtBox",
+    "UserUnit",
+  ].forEach((key) => {
+    page.node.delete(PDFName.of(key));
+  });
+
   page.setRotation(degrees(0));
+
   return true;
 }
 
 /**
- * Makes EVERY page A4 portrait (Letter, A3, landscape, rotated, off-origin boxes ... all fitted onto A4,
- * aspect ratio kept, centred). Returns { document, changed }.
+ * Makes every page A4 portrait.
+ * Returns { document, changed }.
  */
 export async function toA4Document(source) {
   let changed = false;
+
   for (const page of source.getPages()) {
-    if (fitPageToA4(source, page)) changed = true;
+    if (fitPageToA4(source, page)) {
+      changed = true;
+    }
   }
-  return { document: source, changed };
+
+  return {
+    document: source,
+    changed,
+  };
 }
 
-/** Bytes in, A4 bytes out (the original bytes are returned untouched if nothing had to change). */
+/** Returns A4 bytes, preserving the original bytes if no conversion is needed. */
 export async function normalizeToA4(bytes) {
-  const source = await PDFDocument.load(bytes, { ignoreEncryption: true });
+  const source = await PDFDocument.load(bytes, {
+    ignoreEncryption: true,
+  });
+
   const { document, changed } = await toA4Document(source);
+
   return changed ? await document.save() : bytes;
 }
 
-/** Same as normalizeToA4 but also reports how many pages were not A4 to begin with: { bytes, converted }. */
+/** Converts pages to A4 and reports how many pages needed conversion. */
 export async function toA4(bytes) {
-  const source = await PDFDocument.load(bytes, { ignoreEncryption: true });
-  const converted = source.getPages().filter((page) => !isCleanA4(page)).length;
+  const source = await PDFDocument.load(bytes, {
+    ignoreEncryption: true,
+  });
+
+  const converted = source
+    .getPages()
+    .filter((page) => !isCleanA4(page)).length;
+
   const { document, changed } = await toA4Document(source);
-  return { bytes: changed ? await document.save() : bytes, converted };
+
+  return {
+    bytes: changed ? await document.save() : bytes,
+    converted,
+  };
 }
 
 // ---------------------------------------------------------------------------
-// Certificate header: "Certificate Number: n1,n2,n3" at the top-left of every page.
-// Drawn as VECTOR OUTLINES (Arimo, metric-compatible with Arial/Helvetica), not as text:
-// there is no text object in the merged PDF, so a PDF editor cannot retype or alter the numbers.
+// CERTIFICATE HEADER
+//
+// All certificate numbers are drawn on ONE continuous line.
+// No wrapping, line breaks, or font shrinking.
+// Text is allowed to extend beyond the page boundaries.
 // ---------------------------------------------------------------------------
 
-// Matches the real application: Arial-style regular, 12 pt, black, RIGHT-aligned at the top of the page
-// (every line ends 46 pt from the right edge, baseline 20 pt below the top edge).
-// A line may grow to the left until `marginLeft`; when it would go further, the next number starts a new line.
-export const HEADER = { size: 12, minSize: 5, marginRight: 46, marginLeft: 24, firstBaseline: 20, lineGap: 3 };
+export const HEADER = {
+  size: 12,
+  minSize: 5,
+  marginRight: 46,
+  marginLeft: 24,
+  firstBaseline: 20,
+  lineGap: 3,
+};
 
 const fallbackGlyph = GLYPHS["?"];
+
 const glyphOf = (ch) => GLYPHS[ch] ?? fallbackGlyph;
 
-/** Width of `text` in points at the given font size. */
+/** Width of text in PDF points at the specified font size. */
 export function textWidth(text, size) {
   let units = 0;
-  for (const ch of text) units += glyphOf(ch).a;
+
+  for (const ch of text) {
+    units += glyphOf(ch).a;
+  }
+
   return (units * size) / UPM;
 }
 
 /**
- * Lays the certificate numbers out as lines. Rules:
- *  - a certificate number is NEVER split: lines only break after a comma, between whole numbers
- *  - when a line is full the next number starts on a new line directly below
- *  - if one number alone were wider than the page, the font shrinks a little instead of cutting it
- * Returns { lines, size }; joining the lines gives exactly "Certificate Number: n1,n2,n3".
+ * Places all certificate numbers on one continuous line.
+ *
+ * Rules:
+ * - Never wrap onto another line.
+ * - Never split a certificate number.
+ * - Never shrink the font to fit the page.
+ * - Allow text to extend beyond the page boundary.
+ *
+ * Returns { lines, size } for compatibility with the drawing function.
  */
-export function layoutCertificates(numbers, maxWidth = A4.width - HEADER.marginRight - HEADER.marginLeft) {
-  const parts = numbers.map((n, i) => (i < numbers.length - 1 ? `${n},` : n));
-  parts[0] = `Certificate Number: ${parts[0]}`;
+export function layoutCertificates(
+  numbers,
+  maxWidth = A4.width - HEADER.marginRight - HEADER.marginLeft
+) {
+  // Retained for compatibility with existing callers.
+  // Intentionally unused because the text must not wrap.
+  void maxWidth;
 
-  let size = HEADER.size;
-  const widest = Math.max(...parts.map((part) => textWidth(part, 1)));
-  if (widest * size > maxWidth) size = Math.max(HEADER.minSize, Math.floor((maxWidth / widest) * 10) / 10);
+  const cleanNumbers = numbers
+    .map((number) => cleanCertificate(number))
+    .filter(Boolean);
 
-  const lines = [];
-  let line = "";
-  for (const part of parts) {
-    const candidate = line + part;
-    if (line && textWidth(candidate, size) > maxWidth) {
-      lines.push(line);
-      line = part;
-    } else {
-      line = candidate;
-    }
+  if (cleanNumbers.length === 0) {
+    return {
+      lines: [],
+      size: HEADER.size,
+    };
   }
-  if (line) lines.push(line);
-  return { lines, size };
+
+  // Keep every certificate number on the same line.
+  const line = `Certificate Number: ${cleanNumbers.join(", ")}`;
+
+  return {
+    lines: [line],
+    size: HEADER.size,
+  };
 }
 
 const compiled = new Map();
+
 function commandsOf(ch) {
   if (!compiled.has(ch)) {
     const commands = [];
+
     for (const m of glyphOf(ch).p.matchAll(/([MLCZ])([^MLCZ]*)/g)) {
-      const args = m[2].trim() ? m[2].trim().split(/\s+/).map(Number) : [];
+      const args = m[2].trim()
+        ? m[2].trim().split(/\s+/).map(Number)
+        : [];
+
       commands.push([m[1], args]);
     }
+
     compiled.set(ch, commands);
   }
+
   return compiled.get(ch);
 }
 
-/** PDF path operators for `text` drawn as filled glyph shapes with its baseline at (x, y). */
+/**
+ * Creates PDF path operators for text drawn as filled glyph shapes.
+ */
 function outlineOperators(text, x, y, size) {
   const k = size / UPM;
   const operators = [];
+
   let pen = x;
+
   for (const ch of text) {
     for (const [command, a] of commandsOf(ch)) {
-      if (command === "M") operators.push(moveTo(pen + a[0] * k, y + a[1] * k));
-      else if (command === "L") operators.push(lineTo(pen + a[0] * k, y + a[1] * k));
-      else if (command === "C")
+      if (command === "M") {
         operators.push(
-          appendBezierCurve(pen + a[0] * k, y + a[1] * k, pen + a[2] * k, y + a[3] * k, pen + a[4] * k, y + a[5] * k)
+          moveTo(
+            pen + a[0] * k,
+            y + a[1] * k
+          )
         );
-      else operators.push(closePath());
+      } else if (command === "L") {
+        operators.push(
+          lineTo(
+            pen + a[0] * k,
+            y + a[1] * k
+          )
+        );
+      } else if (command === "C") {
+        operators.push(
+          appendBezierCurve(
+            pen + a[0] * k,
+            y + a[1] * k,
+            pen + a[2] * k,
+            y + a[3] * k,
+            pen + a[4] * k,
+            y + a[5] * k
+          )
+        );
+      } else {
+        operators.push(closePath());
+      }
     }
+
     pen += glyphOf(ch).a * k;
   }
+
   return operators;
 }
 
 /**
- * Draws the header FIRST in the page's content (underneath the document), at the page's own default
- * coordinate system. That keeps its position identical on every page, whatever state the original
- * content stream leaves behind. Every line is RIGHT-aligned: it ends exactly at the right margin.
+ * Draws the certificate header on the page.
+ * The complete header remains on one line.
  */
 function stampCertificateHeader(page, numbers) {
   const { lines, size } = layoutCertificates(numbers);
-  const operators = [pushGraphicsState(), setFillingGrayscaleColor(0)];
-  lines.forEach((line, i) => {
-    const baseline = A4.height - HEADER.firstBaseline - i * (size + HEADER.lineGap);
-    const x = A4.width - HEADER.marginRight - textWidth(line, size); // right alignment
-    operators.push(...outlineOperators(line, x, baseline, size));
+
+  const operators = [
+    pushGraphicsState(),
+    setFillingGrayscaleColor(0),
+  ];
+
+  lines.forEach((line) => {
+    const baseline =
+      A4.height - HEADER.firstBaseline;
+
+    // Preserve right alignment.
+    // A long line may extend beyond the left page boundary.
+    const x =
+      A4.width -
+      HEADER.marginRight -
+      textWidth(line, size);
+
+    operators.push(
+      ...outlineOperators(line, x, baseline, size)
+    );
   });
+
   operators.push(fill(), popGraphicsState());
+
   page.pushOperators(...operators);
 
+  // Place the header before the original document content.
   const contents = page.node.normalizedEntries().Contents;
+
   if (contents && contents.size() > 1) {
     const drawn = contents.get(contents.size() - 1);
+
     contents.remove(contents.size() - 1);
     contents.insert(0, drawn);
   }
 }
 
-const cleanCertificate = (value) => String(value).trim().toUpperCase().replace(/[^\x20-\x7E]/g, "");
+const cleanCertificate = (value) =>
+  String(value)
+    .trim()
+    .toUpperCase()
+    .replace(/[^\x20-\x7E]/g, "");
 
 // ---------------------------------------------------------------------------
-// Merge
+// MERGE
 // ---------------------------------------------------------------------------
 
 /**
- * Builds ONE merged A4 PDF per group (a group = participants holding the same set of documents).
- *  - every eStamp for a target document is inserted immediately BEFORE it, in the configured order
- *  - certificate numbers are grouped per target document and printed at the top of EVERY page of that
- *    document as "Certificate Number: n1,n2,n3"; documents without a stamp get nothing
+ * Builds one merged A4 PDF per group.
+ *
+ * - Inserts every eStamp immediately before its target document.
+ * - Prints all certificate numbers for a target document on one line.
+ * - Prints the certificate header on every page of that document.
+ * - Documents without eStamps receive no certificate header.
+ *
  * Returns { outputs, warnings }.
  */
-export async function buildOutputs({ documents, groups, stamps }) {
+export async function buildOutputs({
+  documents,
+  groups,
+  stamps,
+}) {
   const warnings = [];
 
   const sources = new Map();
+
+  // Load and normalize source documents.
   for (const doc of documents) {
     try {
-      const loaded = await PDFDocument.load(doc.bytes, { ignoreEncryption: true });
-      sources.set(doc.id, (await toA4Document(loaded)).document);
+      const loaded = await PDFDocument.load(doc.bytes, {
+        ignoreEncryption: true,
+      });
+
+      sources.set(
+        doc.id,
+        (await toA4Document(loaded)).document
+      );
     } catch {
-      warnings.push(`Document ID ${doc.id} is not a readable PDF and was skipped.`);
+      warnings.push(
+        `Document ID ${doc.id} is not a readable PDF and was skipped.`
+      );
     }
   }
 
   const stampDocs = new Map();
+
+  // Load and normalize eStamp PDFs.
   for (const stamp of stamps) {
     try {
-      const loaded = await PDFDocument.load(stamp.bytes, { ignoreEncryption: true });
-      stampDocs.set(stamp.id, (await toA4Document(loaded)).document);
+      const loaded = await PDFDocument.load(stamp.bytes, {
+        ignoreEncryption: true,
+      });
+
+      stampDocs.set(
+        stamp.id,
+        (await toA4Document(loaded)).document
+      );
     } catch {
-      warnings.push(`eStamp "${stamp.fileName}" is not a readable PDF and was skipped.`);
+      warnings.push(
+        `eStamp "${stamp.fileName}" is not a readable PDF and was skipped.`
+      );
     }
   }
 
@@ -303,31 +531,83 @@ export async function buildOutputs({ documents, groups, stamps }) {
 
     for (const id of group.documentIds) {
       const source = sources.get(id);
+
       if (!source) continue;
 
-      // all stamps mapped to THIS document, in configured order
-      const targetStamps = stamps.filter((s) => s.targetDocumentId === id && stampDocs.has(s.id));
+      // Find all stamps mapped to this document in configured order.
+      const targetStamps = stamps.filter(
+        (stamp) =>
+          stamp.targetDocumentId === id &&
+          stampDocs.has(stamp.id)
+      );
+
+      // Insert eStamp pages before the corresponding document.
       for (const stamp of targetStamps) {
         const stampDoc = stampDocs.get(stamp.id);
-        const stampPages = await merged.copyPages(stampDoc, stampDoc.getPageIndices());
-        stampPages.forEach((page) => merged.addPage(page));
-        sequence.push({ kind: "stamp", certificate: cleanCertificate(stamp.certificateNumber) });
+
+        const stampPages = await merged.copyPages(
+          stampDoc,
+          stampDoc.getPageIndices()
+        );
+
+        stampPages.forEach((page) => {
+          merged.addPage(page);
+        });
+
+        sequence.push({
+          kind: "stamp",
+          certificate: cleanCertificate(
+            stamp.certificateNumber
+          ),
+        });
       }
 
-      const pages = await merged.copyPages(source, source.getPageIndices());
-      const numbers = targetStamps.map((s) => cleanCertificate(s.certificateNumber)).filter(Boolean);
-      if (numbers.length) pages.forEach((page) => stampCertificateHeader(page, numbers));
-      pages.forEach((page) => merged.addPage(page));
-      sequence.push({ kind: "doc", id });
+      // Copy the target document pages.
+      const pages = await merged.copyPages(
+        source,
+        source.getPageIndices()
+      );
+
+      // Collect certificate numbers in configured order.
+      const numbers = targetStamps
+        .map((stamp) =>
+          cleanCertificate(stamp.certificateNumber)
+        )
+        .filter(Boolean);
+
+      // Draw one continuous certificate header on every page.
+      if (numbers.length > 0) {
+        pages.forEach((page) => {
+          stampCertificateHeader(page, numbers);
+        });
+      }
+
+      pages.forEach((page) => {
+        merged.addPage(page);
+      });
+
+      sequence.push({
+        kind: "doc",
+        id,
+      });
     }
 
-    const label = group.relations.map((r) => r.label).join(" / ");
+    const label = group.relations
+      .map((relation) => relation.label)
+      .join(" / ");
+
     if (merged.getPageCount() === 0) {
-      warnings.push(`${label} (${group.participants.join(", ")}): no matching documents, nothing to merge.`);
+      warnings.push(
+        `${label} (${group.participants.join(", ")}): no matching documents, nothing to merge.`
+      );
+
       continue;
     }
+
     if (!merged.getPages().every(isCleanA4)) {
-      warnings.push(`${label}: some pages are not exactly A4 - please report this file.`);
+      warnings.push(
+        `${label}: some pages are not exactly A4 - please report this file.`
+      );
     }
 
     outputs.push({
@@ -340,30 +620,51 @@ export async function buildOutputs({ documents, groups, stamps }) {
     });
   }
 
-  return { outputs, warnings };
+  return {
+    outputs,
+    warnings,
+  };
 }
 
 /**
- * Adds file names. Flat ZIP layout: <relation>/<TXN ID>.pdf  (e.g. debtor/DDE_807911.pdf) - no per-participant
- * folders. An output serves every relation of its group, so it is placed once in EACH of those relation folders
- * (same merged PDF, generated only once). If one relation folder needs several different files
- * (participants holding different documents) the extra ones become _2, _3 so nothing is overwritten.
+ * Adds output file names.
+ *
+ * Flat ZIP layout:
+ * <relation>/<TXN ID>.pdf
+ *
+ * If one relation folder needs multiple different files,
+ * suffixes such as _2 and _3 prevent files from being overwritten.
  */
 export function planFilenames(outputs, txnId) {
   const base = safeName(txnId);
   const counts = new Map();
+
   return outputs.map((output) => {
     const files = output.relations.map((relation) => {
-      const folder = safeName((relation.raw || relation.label).toLowerCase());
+      const folder = safeName(
+        (relation.raw || relation.label).toLowerCase()
+      );
+
       const n = (counts.get(folder) ?? 0) + 1;
+
       counts.set(folder, n);
+
       const suffix = n > 1 ? `_${n}` : "";
-      return { relationLabel: relation.label, folder, path: `${folder}/${base}${suffix}.pdf`, suffix };
+
+      return {
+        relationLabel: relation.label,
+        folder,
+        path: `${folder}/${base}${suffix}.pdf`,
+        suffix,
+      };
     });
+
     return {
       ...output,
       files,
-      singleName: `${base}_${files.map((f) => f.folder + f.suffix).join("_")}.pdf`,
+      singleName: `${base}_${files
+        .map((file) => file.folder + file.suffix)
+        .join("_")}.pdf`,
     };
   });
 }
