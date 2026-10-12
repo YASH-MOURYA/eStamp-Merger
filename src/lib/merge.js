@@ -1,4 +1,8 @@
-import { PDFArray, PDFDict, PDFDocument, PDFName, PDFNumber, StandardFonts, degrees, rgb } from "pdf-lib";
+import {
+  PDFArray, PDFDict, PDFDocument, PDFName, PDFNumber,
+  appendBezierCurve, closePath, degrees, fill, lineTo, moveTo, popGraphicsState, pushGraphicsState, setFillingGrayscaleColor,
+} from "pdf-lib";
+import { GLYPHS, UPM } from "./glyphs.js";
 
 /** A4 portrait in PDF points (210 x 297 mm). */
 export const A4 = { width: 595.28, height: 841.89 };
@@ -35,10 +39,21 @@ function pageBox(page) {
 const sameBox = (a, b) =>
   Math.abs(a.x - b.x) < EPS && Math.abs(a.y - b.y) < EPS && Math.abs(a.width - b.width) < EPS && Math.abs(a.height - b.height) < EPS;
 
-/** True when the page is already exactly A4 portrait, origin (0,0), unrotated. */
+const USER_UNIT = PDFName.of("UserUnit");
+function userUnit(page) {
+  const value = page.node.lookupMaybe(USER_UNIT, PDFNumber);
+  return value ? value.asNumber() : 1;
+}
+
+/** True when the page is already exactly A4 portrait, origin (0,0), unrotated, normal user units. */
 export function isCleanA4(page) {
   const a4 = { x: 0, y: 0, width: A4.width, height: A4.height };
-  return page.getRotation().angle % 360 === 0 && sameBox(page.getMediaBox(), a4) && sameBox(page.getCropBox(), a4);
+  return (
+    page.getRotation().angle % 360 === 0 &&
+    Math.abs(userUnit(page) - 1) < 1e-9 &&
+    sameBox(page.getMediaBox(), a4) &&
+    sameBox(page.getCropBox(), a4)
+  );
 }
 
 const fmt = (n) => String(Number(n.toFixed(6)));
@@ -104,7 +119,7 @@ function fitPageToA4(doc, page) {
 
   page.setMediaBox(0, 0, A4.width, A4.height);
   page.setCropBox(0, 0, A4.width, A4.height);
-  ["TrimBox", "BleedBox", "ArtBox"].forEach((key) => page.node.delete(PDFName.of(key)));
+  ["TrimBox", "BleedBox", "ArtBox", "UserUnit"].forEach((key) => page.node.delete(PDFName.of(key)));
   page.setRotation(degrees(0));
   return true;
 }
@@ -137,22 +152,46 @@ export async function toA4(bytes) {
 }
 
 // ---------------------------------------------------------------------------
-// Certificate header: "Certificate Number: n1,n2,n3" at the top-left of every page
+// Certificate header: "Certificate Number: n1,n2,n3" at the top-left of every page.
+// Drawn as VECTOR OUTLINES (Arimo, metric-compatible with Arial/Helvetica), not as text:
+// there is no text object in the merged PDF, so a PDF editor cannot retype or alter the numbers.
 // ---------------------------------------------------------------------------
 
-// Matches the reference screenshots: regular Arial/Helvetica, 12 pt, black, starting at the LEFT margin of the page top.
-// Three 16-character certificate numbers fit on one line at this size.
-const HEADER = { size: 12, marginX: 32, firstBaseline: 20, lineGap: 3 };
+// Matches the real application: Arial-style regular, 12 pt, black, RIGHT-aligned at the top of the page
+// (every line ends 46 pt from the right edge, baseline 20 pt below the top edge).
+// A line may grow to the left until `marginLeft`; when it would go further, the next number starts a new line.
+export const HEADER = { size: 12, minSize: 5, marginRight: 46, marginLeft: 24, firstBaseline: 20, lineGap: 3 };
 
-/** Wrapped at commas so the COMPLETE list always fits the page width. */
-function certificateLines(numbers, font, maxWidth) {
+const fallbackGlyph = GLYPHS["?"];
+const glyphOf = (ch) => GLYPHS[ch] ?? fallbackGlyph;
+
+/** Width of `text` in points at the given font size. */
+export function textWidth(text, size) {
+  let units = 0;
+  for (const ch of text) units += glyphOf(ch).a;
+  return (units * size) / UPM;
+}
+
+/**
+ * Lays the certificate numbers out as lines. Rules:
+ *  - a certificate number is NEVER split: lines only break after a comma, between whole numbers
+ *  - when a line is full the next number starts on a new line directly below
+ *  - if one number alone were wider than the page, the font shrinks a little instead of cutting it
+ * Returns { lines, size }; joining the lines gives exactly "Certificate Number: n1,n2,n3".
+ */
+export function layoutCertificates(numbers, maxWidth = A4.width - HEADER.marginRight - HEADER.marginLeft) {
   const parts = numbers.map((n, i) => (i < numbers.length - 1 ? `${n},` : n));
   parts[0] = `Certificate Number: ${parts[0]}`;
+
+  let size = HEADER.size;
+  const widest = Math.max(...parts.map((part) => textWidth(part, 1)));
+  if (widest * size > maxWidth) size = Math.max(HEADER.minSize, Math.floor((maxWidth / widest) * 10) / 10);
+
   const lines = [];
   let line = "";
   for (const part of parts) {
     const candidate = line + part;
-    if (line && font.widthOfTextAtSize(candidate, HEADER.size) > maxWidth) {
+    if (line && textWidth(candidate, size) > maxWidth) {
       lines.push(line);
       line = part;
     } else {
@@ -160,25 +199,58 @@ function certificateLines(numbers, font, maxWidth) {
     }
   }
   if (line) lines.push(line);
-  return lines;
+  return { lines, size };
+}
+
+const compiled = new Map();
+function commandsOf(ch) {
+  if (!compiled.has(ch)) {
+    const commands = [];
+    for (const m of glyphOf(ch).p.matchAll(/([MLCZ])([^MLCZ]*)/g)) {
+      const args = m[2].trim() ? m[2].trim().split(/\s+/).map(Number) : [];
+      commands.push([m[1], args]);
+    }
+    compiled.set(ch, commands);
+  }
+  return compiled.get(ch);
+}
+
+/** PDF path operators for `text` drawn as filled glyph shapes with its baseline at (x, y). */
+function outlineOperators(text, x, y, size) {
+  const k = size / UPM;
+  const operators = [];
+  let pen = x;
+  for (const ch of text) {
+    for (const [command, a] of commandsOf(ch)) {
+      if (command === "M") operators.push(moveTo(pen + a[0] * k, y + a[1] * k));
+      else if (command === "L") operators.push(lineTo(pen + a[0] * k, y + a[1] * k));
+      else if (command === "C")
+        operators.push(
+          appendBezierCurve(pen + a[0] * k, y + a[1] * k, pen + a[2] * k, y + a[3] * k, pen + a[4] * k, y + a[5] * k)
+        );
+      else operators.push(closePath());
+    }
+    pen += glyphOf(ch).a * k;
+  }
+  return operators;
 }
 
 /**
  * Draws the header FIRST in the page's content (underneath the document), at the page's own default
  * coordinate system. That keeps its position identical on every page, whatever state the original
- * content stream leaves behind.
+ * content stream leaves behind. Every line is RIGHT-aligned: it ends exactly at the right margin.
  */
-function stampCertificateHeader(page, font, numbers) {
-  const lines = certificateLines(numbers, font, A4.width - HEADER.marginX * 2);
+function stampCertificateHeader(page, numbers) {
+  const { lines, size } = layoutCertificates(numbers);
+  const operators = [pushGraphicsState(), setFillingGrayscaleColor(0)];
   lines.forEach((line, i) => {
-    page.drawText(line, {
-      x: HEADER.marginX,
-      y: A4.height - HEADER.firstBaseline - i * (HEADER.size + HEADER.lineGap),
-      size: HEADER.size,
-      font,
-      color: rgb(0, 0, 0),
-    });
+    const baseline = A4.height - HEADER.firstBaseline - i * (size + HEADER.lineGap);
+    const x = A4.width - HEADER.marginRight - textWidth(line, size); // right alignment
+    operators.push(...outlineOperators(line, x, baseline, size));
   });
+  operators.push(fill(), popGraphicsState());
+  page.pushOperators(...operators);
+
   const contents = page.node.normalizedEntries().Contents;
   if (contents && contents.size() > 1) {
     const drawn = contents.get(contents.size() - 1);
@@ -227,7 +299,6 @@ export async function buildOutputs({ documents, groups, stamps }) {
 
   for (const group of groups) {
     const merged = await PDFDocument.create();
-    const font = await merged.embedFont(StandardFonts.Helvetica);
     const sequence = [];
 
     for (const id of group.documentIds) {
@@ -245,7 +316,7 @@ export async function buildOutputs({ documents, groups, stamps }) {
 
       const pages = await merged.copyPages(source, source.getPageIndices());
       const numbers = targetStamps.map((s) => cleanCertificate(s.certificateNumber)).filter(Boolean);
-      if (numbers.length) pages.forEach((page) => stampCertificateHeader(page, font, numbers));
+      if (numbers.length) pages.forEach((page) => stampCertificateHeader(page, numbers));
       pages.forEach((page) => merged.addPage(page));
       sequence.push({ kind: "doc", id });
     }

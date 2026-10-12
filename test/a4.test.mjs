@@ -76,23 +76,28 @@ const merged = await PDFDocument.load(outputs[0].bytes);
 assert.ok(merged.getPages().every(isCleanA4), "merged output must be all exact A4");
 console.log("merge: order OK, all", merged.getPageCount(), "merged pages exact A4");
 
-// ---- certificate header style + position are locked: regular 12 pt, x = 32 (left), drawn FIRST in the page content ----
+// ---- certificate header: vector outlines (NOT text), first in the page content, RIGHT-aligned ----
 {
   const { decodePDFRawStream, PDFArray, PDFRawStream } = await import("pdf-lib");
+  const { HEADER } = await import("../src/lib/merge.js");
+  const rightEdge = A4.width - HEADER.marginRight; // 549.28
   const pdf = await PDFDocument.load(outputs[0].bytes);
-  // page index of DOC 2: D1(2 pages) + 3 stamps... find the first page whose first content stream mentions "Certificate"
   let checked = 0;
   for (const page of pdf.getPages()) {
     const contents = page.node.Contents();
     const first = contents instanceof PDFArray ? contents.lookup(0) : contents;
     if (!(first instanceof PDFRawStream)) continue;
     const text = Buffer.from(decodePDFRawStream(first).decode()).toString("latin1");
-    if (!text.includes("Tf")) continue;
-    assert.match(text, /\b12 Tf\b/, "header must be 12 pt");
-    assert.match(text, /\b32 \d+(\.\d+)? Tm\b|\b32 \d+(\.\d+)? Td\b/, "header must start at x = 32 (left margin)");
+    if (!/\bf\b/.test(text) || !/\bm\b/.test(text)) continue; // not a header stream
+    assert.ok(!/\bTj\b|\bTJ\b|\bBT\b|\bTf\b/.test(text), "header must contain NO text operators (so it cannot be edited as text)");
+    // every x coordinate of every outline point
+    const xs = [...text.matchAll(/(-?\d+(?:\.\d+)?) (-?\d+(?:\.\d+)?) (?:m|l)\b/g)].map((m) => Number(m[1]));
+    assert.ok(xs.length > 50, "header should contain glyph outlines");
+    const maxX = Math.max(...xs);
+    assert.ok(maxX <= rightEdge + 0.5 && maxX >= rightEdge - 8, `header must END at the right margin (x≈${rightEdge.toFixed(1)}), got ${maxX.toFixed(1)}`);
     checked++;
   }
-  assert.ok(checked >= 4, `expected header streams on the target pages, found ${checked}`);
-  console.log("header: 12 pt, x = 32 (left), first in page content on", checked, "pages");
+  assert.ok(checked >= 4, `expected outlined header streams on the target pages, found ${checked}`);
+  console.log("header: vector outlines, no text operators, right-aligned (ends at x =", rightEdge.toFixed(1) + ") on", checked, "pages");
 }
 console.log("a4 tests passed");

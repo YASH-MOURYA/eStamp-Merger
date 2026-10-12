@@ -11,7 +11,7 @@ npm run dev      # Codespaces: already bound to 0.0.0.0 via vite.config.js
 npm test         # parsing, A4, certificates, naming
 ```
 
-Upload your transaction JSON and required PDF documents using the application interface to get started.
+Try it with `samples/sample-transaction.json` and `samples/sample-estamp-1..4.pdf`.
 
 ## Deploy
 
@@ -34,8 +34,11 @@ Static site, no backend: see **DEPLOY.md** (Netlify drag-and-drop or GitHub, `ne
   with the page. Pages that are already exact A4 are left untouched.
 - **Merge order**: all eStamps of a target document are inserted immediately before it, in the order they appear in `estampdtls`.
 - **Certificate numbers grouped by target document ID**: every page of that document gets
-  `Certificate Number: n1,n2,n3` at the top-left in regular Arial/Helvetica 12 pt (wrapped at commas if long, never
-  truncated), at the same position on every page, whatever the page's own geometry. Documents without an eStamp get nothing. Any number of eStamps per document is supported.
+  `Certificate Number: n1,n2,n3` at the **top-right**, in Arial-style regular 12 pt, every line **right-aligned** (ending 46 pt
+  from the right edge, like the real application). When a line is full, the next number starts on a new line directly below;
+  a certificate number is never split. At 12 pt a line holds 3 numbers. Documents without an eStamp get nothing.
+  The numbers are drawn as **vector outlines, not text**, so they cannot be retyped or edited in a PDF editor (they are also
+  not selectable/searchable). The position is identical on every page whatever the page's own geometry.
 - **One merged PDF per set of documents** (not per relation):
   - everyone holds the same document IDs -> ONE merged PDF, written once into each relation folder
     (`creditor/`, `debtor/`, `co-obligant/` ... identical file);

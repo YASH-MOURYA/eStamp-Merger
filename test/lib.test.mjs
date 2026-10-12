@@ -84,27 +84,8 @@ const seq = (o) => o.sequence.filter((x) => x.kind === "doc").map((x) => x.id).j
 
 // G) eStamp requests (estampdtls): exactly one slot per request
 {
-  const transaction = {
-    loan: {
-      documentdtls: [
-        { documentID: "50", docData: await makePdf("Document 50") },
-        { documentID: "42", docData: await makePdf("Document 42") },
-        { documentID: "22", docData: await makePdf("Document 22") },
-        { documentID: "35", docData: await makePdf("Document 35") },
-      ],
-      prtcptentty: [
-        { fulnm: "Borrower", reltocntrct: "debtor", documentID: ["50", "42", "22", "35"] },
-      ],
-      estampdtls: [
-        { documentID: "50", stampDutyAmount: "10", articleCode: "0003" },
-        { documentID: "42", stampDutyAmount: "10", articleCode: "0003" },
-        { documentID: "22", stampDutyAmount: "100", articleCode: "0001" },
-        { documentID: "35", stampDutyAmount: "100", articleCode: "0001" },
-      ],
-    },
-  };
-
-  const parsed = parseTransaction(transaction);
+  const sample = JSON.parse(fs.readFileSync(new URL("../samples/sample-transaction.json", import.meta.url), "utf8"));
+  const parsed = parseTransaction(sample);
   assert.equal(parsed.requests.map((r) => r.documentId).join(), "50,42,22,35");
   console.log("G) estampdtls            -> 4 requests: 50,42,22,35");
 }

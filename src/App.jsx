@@ -575,7 +575,7 @@ export default function App() {
             })}
 
             <p className="rule-note">
-              Each eStamp goes <b>right before</b> its document. Its certificate number prints at the <b>top of every page</b> of that document.
+              Each eStamp goes <b>right before</b> its document. Its certificate number prints at the <b>top-right of every page</b> of that document.
             </p>
           </Card>
 
