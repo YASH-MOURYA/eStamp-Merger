@@ -1,0 +1,23 @@
+{
+  "name": "estamp-merger",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "node test/lib.test.mjs && node test/a4.test.mjs && node test/many-stamps.test.mjs && node test/ids.test.mjs"
+  },
+  "dependencies": {
+    "jszip": "^3.10.1",
+    "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "^4.10.38",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "vite": "^6.0.7"
+  }
+}

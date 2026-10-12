@@ -1,0 +1,15 @@
+# Netlify reads this file automatically - no settings needed in the dashboard.
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "20"
+
+# Basic hardening headers (the app is a static site; PDFs never leave the browser).
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "no-referrer"
+    X-Frame-Options = "DENY"
