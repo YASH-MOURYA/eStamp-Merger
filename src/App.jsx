@@ -411,7 +411,7 @@ export default function App() {
           <span className="logo" aria-hidden="true"><i /></span>
           <div>
             <h1>eStamp Merger</h1>
-            <p>Merge eStamps into transaction PDFs · A4 output · runs in your browser</p>
+            <p>Merge eStamps into transaction PDFs · A4 output </p>
           </div>
         </div>
         <span className={`status-pill ${status.cls}`}><b />{status.text}</span>
